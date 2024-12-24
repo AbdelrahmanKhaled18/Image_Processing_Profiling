@@ -6,18 +6,18 @@ import time
 import threading
 import cProfile
 import pstats
-import io
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 1234
 
 # Initialize logging
 initTime = time.time()
-logging.basicConfig(filename="log.txt", filemode="w", datefmt="%H:%M:%S", level=logging.INFO)
+logging.basicConfig(filename="log.txt", filemode="w", level=logging.INFO,
+                    format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 def log(step: str):
-    logging.info(f"{step}: {time.time() - initTime}")
+    logging.info(f"{step}: {time.time() - initTime:.4f}s")
 
 
 def process_image(decoded_chunk, selected_option):
@@ -25,6 +25,8 @@ def process_image(decoded_chunk, selected_option):
     Process the image chunk based on the selected option.
     """
     try:
+        log(f"Processing image with option {selected_option}")
+
         if selected_option == "edge_detection":
             processed_chunk = cv2.Canny(decoded_chunk, 100, 200)
         elif selected_option == "color_inversion":
@@ -62,8 +64,10 @@ def process_image(decoded_chunk, selected_option):
             kernel = np.array([[0, -0.5, 0], [-0.5, 3, -0.5], [0, -0.5, 0]])
             processed_chunk = cv2.filter2D(enhanced_image, -1, kernel)
         else:
+            log("Invalid processing option. Returning original image.")
             processed_chunk = decoded_chunk
 
+        log("Processing completed")
         return processed_chunk
     except Exception as e:
         log(f"Error processing image: {e}")
@@ -75,18 +79,22 @@ def handle_client(client_socket):
     Handles a single client request.
     """
     try:
+        log("Started handling client")
+
         # Receive the selected option
         selected_option = client_socket.recv(1024).decode()
-        print(f"Received processing option: {selected_option}")
+        log(f"Received processing option: {selected_option}")
 
         # Receive the number of images
         num_images = int.from_bytes(client_socket.recv(8), byteorder="big")
-        print(f"Number of images to process: {num_images}")
+        log(f"Number of images to process: {num_images}")
 
-        for _ in range(num_images):
+        for img_index in range(num_images):
+            log(f"Processing image {img_index + 1}/{num_images}")
+
             # Receive the size of the incoming image
             img_size = int.from_bytes(client_socket.recv(8), byteorder="big")
-            print(f"Expecting {img_size} bytes for the image.")
+            log(f"Expecting {img_size} bytes for the image.")
 
             # Receive the image bytes
             raw_image = b""
@@ -94,16 +102,17 @@ def handle_client(client_socket):
                 bytes_remaining = img_size - len(raw_image)
                 raw_image += client_socket.recv(min(4096, bytes_remaining))
 
-            print(f"Received image ({len(raw_image)} bytes)")
+            log(f"Received image ({len(raw_image)} bytes)")
 
             # Decode the image
             nparr = np.frombuffer(raw_image, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if img is None:
+                log("Failed to decode the received image. Skipping processing.")
                 raise ValueError("Failed to decode the received image.")
 
-            print(f"Image decoded. Dimensions: {img.shape}")
+            log(f"Image decoded. Dimensions: {img.shape}")
 
             # Process the image
             start_time = time.time()
@@ -116,34 +125,40 @@ def handle_client(client_socket):
 
             # Send the size of the processed image
             client_socket.sendall(len(img_encoded).to_bytes(8, byteorder="big"))
+            log(f"Sent processed image size: {len(img_encoded)} bytes")
 
             # Send the processed image bytes
             client_socket.sendall(img_encoded.tobytes())
-            print("Processed image sent back to client.")
+            log("Processed image sent back to client")
 
     except Exception as e:
-        print(f"Error handling client: {e}")
         log(f"Error handling client: {e}")
     finally:
         client_socket.close()
+        log("Client connection closed")
 
 
 def main():
+    """
+    Main server loop that accepts connections and handles clients.
+    """
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((SERVER_HOST, SERVER_PORT))
     server_socket.listen(5)
-    print(f"Server listening on {SERVER_HOST}:{SERVER_PORT}")
+    log(f"Server listening on {SERVER_HOST}:{SERVER_PORT}")
+
     try:
         while True:
             client_socket, client_address = server_socket.accept()
-            print(f"Connection from {client_address}")
-            client_thread = threading.Thread(target=handle_client, args=(client_socket,))
+            log(f"Connection from {client_address}")
+            client_thread = threading.Thread(target=handle_client, args=(client_socket,), daemon=True)
             client_thread.start()
-    except KeyboardInterrupt:
-        print("Shutting down the server...")
+
+    except Exception as e:
+        log(f"Unhandled exception: {e}")
     finally:
         server_socket.close()
-        print("Server socket closed.")
+        log("Server socket closed.")
 
 
 if __name__ == "__main__":
@@ -151,12 +166,10 @@ if __name__ == "__main__":
     try:
         profiler.enable()
         main()
-    except KeyboardInterrupt:
-        print("KeyboardInterrupt caught. Exiting gracefully...")
     except Exception as e:
-        print(f"Unhandled exception: {e}")
+        log(f"Unhandled exception in main: {e}")
     finally:
-        print("Saving profiling results...")
+        log("Saving profiling results...")
         profiler.disable()
         try:
             file_path = "E:/Image_Processing_Profiling/profiling_results.txt"
@@ -165,7 +178,7 @@ if __name__ == "__main__":
                 stats.strip_dirs()
                 stats.sort_stats("cumtime")
                 stats.print_stats()
-            print(f"Profiling results saved to {file_path}")
+            log(f"Profiling results saved to {file_path}")
         except Exception as e:
-            print(f"Error saving profiling results: {e}")
-        print("Shutting down the server...")
+            log(f"Error saving profiling results: {e}")
+        log("Shutting down the server...")

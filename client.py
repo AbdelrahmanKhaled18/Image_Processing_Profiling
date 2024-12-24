@@ -132,7 +132,6 @@ def upload_file(file_entry, selected_option):
                 cv2.destroyAllWindows()
 
             showinfo("Success", "Files have been uploaded and displayed.")
-            reconnect_to_server()
 
         except FileNotFoundError as e:
             showinfo("Error", str(e))

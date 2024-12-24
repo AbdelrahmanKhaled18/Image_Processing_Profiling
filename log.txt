@@ -1,1 +1,20 @@
-INFO:root:Image processed in 0.0105s: 6.039428949356079
+2024-12-24 13:45:59,548 - INFO - Server listening on localhost:1234: 0.0030s
+2024-12-24 13:46:02,752 - INFO - Connection from ('127.0.0.1', 51109): 3.2072s
+2024-12-24 13:46:02,753 - INFO - Started handling client: 3.2082s
+2024-12-24 13:46:06,602 - INFO - Received processing option: edge_detection: 7.0567s
+2024-12-24 13:46:06,603 - INFO - Number of images to process: 1: 7.0577s
+2024-12-24 13:46:06,603 - INFO - Processing image 1/1: 7.0577s
+2024-12-24 13:46:06,639 - INFO - Expecting 104084 bytes for the image.: 7.0942s
+2024-12-24 13:46:06,639 - INFO - Received image (104084 bytes): 7.0942s
+2024-12-24 13:46:06,652 - INFO - Image decoded. Dimensions: (1057, 1746, 3): 7.1064s
+2024-12-24 13:46:06,652 - INFO - Processing image with option edge_detection: 7.1074s
+2024-12-24 13:46:06,666 - INFO - Processing completed: 7.1208s
+2024-12-24 13:46:06,666 - INFO - Image processed in 0.0135s: 7.1208s
+2024-12-24 13:46:06,683 - INFO - Sent processed image size: 97430 bytes: 7.1380s
+2024-12-24 13:46:06,683 - INFO - Processed image sent back to client: 7.1380s
+2024-12-24 13:46:06,683 - INFO - Client connection closed: 7.1380s
+2024-12-24 13:47:06,984 - INFO - Server socket closed.: 67.4395s
+2024-12-24 13:47:06,984 - INFO - KeyboardInterrupt caught. Exiting gracefully...: 67.4395s
+2024-12-24 13:47:06,984 - INFO - Saving profiling results...: 67.4395s
+2024-12-24 13:47:06,989 - INFO - Profiling results saved to E:/Image_Processing_Profiling/profiling_results.txt: 67.4444s
+2024-12-24 13:47:06,989 - INFO - Shutting down the server...: 67.4444s
