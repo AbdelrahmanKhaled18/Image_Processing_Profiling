@@ -3,16 +3,28 @@ from tkinter import *
 from tkinter import filedialog
 from tkinter.messagebox import showinfo
 import socket
-
 import cv2
 import numpy as np
 
-SERVER_HOST = "40.127.9.222"
-SERVER_PORT = 12345
+SERVER_HOST = "localhost"
+SERVER_PORT = 1234
 
 imgs = []
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client_socket.connect((SERVER_HOST, SERVER_PORT))
+client_socket = None
+
+
+def connect_to_server():
+    global client_socket
+    try:
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((SERVER_HOST, SERVER_PORT))
+        print("Connected to the server")
+    except Exception as e:
+        print(f"Error connecting to the server: {e}")
+        showinfo("Error", "Failed to connect to the server.")
+
+
+connect_to_server()
 
 
 def create_form_elements(root):
@@ -74,53 +86,64 @@ def upload_file(file_entry, selected_option):
 
     if file_paths and any(file_paths):
         try:
+            # Send the selected option
             client_socket.sendall(selected_option.get().encode())
-            # Send number of images
+            print(f"Sent selected option: {selected_option.get()}")
+
+            # Send the number of images
             client_socket.sendall(len(file_paths).to_bytes(8, byteorder="big"))
-            images = [cv2.imread(file_path) for file_path in file_paths]
-            image_sizes = [img.shape[0:2] for img in images]
-            for img in images:
-                # Send number of rows in image
-                client_socket.sendall(img.shape[0].to_bytes(8, byteorder="big"))
-                # Send number of columns in image
-                client_socket.sendall(img.shape[1].to_bytes(8, byteorder="big"))
 
-                # Send image as bytes
-                client_socket.sendall(img.astype(np.ubyte).tobytes())
+            for file_path in file_paths:
+                # Read the image
+                img = cv2.imread(file_path)
+                if img is None:
+                    raise FileNotFoundError(f"Unable to load file: {file_path}")
 
-            print("Sent full data")
-            imgs = []  # Reset the list of images
-            for i in range(len(images)):
-                rows, cols = image_sizes[i]
-                bytes_no = rows * cols * 3
+                # Encode image to bytes
+                _, img_encoded = cv2.imencode(".jpg", img)
+                img_bytes = img_encoded.tobytes()
+
+                # Send the size of the image
+                client_socket.sendall(len(img_bytes).to_bytes(8, byteorder="big"))
+
+                # Send the image bytes
+                client_socket.sendall(img_bytes)
+                print("Image sent to server.")
+
+                # Receive the size of the processed image
+                bytes_no = int.from_bytes(client_socket.recv(8), byteorder="big")
+
+                # Receive the processed image bytes
                 raw_image = b""
                 while len(raw_image) < bytes_no:
                     bytes_remaining = bytes_no - len(raw_image)
-                    bytes_to_recv = 4096 if bytes_remaining > 4096 else bytes_remaining
-                    raw_image += client_socket.recv(bytes_to_recv)
-                imgs.append(np.frombuffer(raw_image, dtype=np.ubyte).reshape(rows, cols, 3).astype(np.uint8))
+                    raw_image += client_socket.recv(min(4096, bytes_remaining))
 
-            for img in imgs:
-                # Display the concatenated image
+                print(f"Received processed image ({len(raw_image)} bytes)")
+
+                # Decode the received image
+                nparr = np.frombuffer(raw_image, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+                # Append and display the image
+                imgs.append(img)
                 cv2.imshow("Processed Image", img)
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()
+
             showinfo("Success", "Files have been uploaded and displayed.")
+            reconnect_to_server()
 
         except FileNotFoundError as e:
-            showinfo("Error", f"File not found: {e}")
+            showinfo("Error", str(e))
         except OSError as e:
-            if e.errno == 10058 or e.errno == 10057 or e.errno == 10053:
-                showinfo("Error", "Reconnecting to the Server...\n You can upload now!")
-                reconnect_to_server()
-            else:
-                showinfo("Error", f"An error occurred: {e}. Please reconnect to the server.")
-                reconnect_to_server()
+            print(f"Connection error: {e}")
+            reconnect_to_server()
         except BrokenPipeError as e:
+            print(f"Broken pipe error: {e}")
             reconnect_to_server()
     else:
         showinfo("Error", "Please select one or more files to upload.")
-        return
 
 
 def download_images(images):
@@ -163,8 +186,6 @@ def reconnect_to_server():
 
     try:
         # Reconnect to the server
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((SERVER_HOST, SERVER_PORT))
-        print("Reconnected to the server")
+        connect_to_server()
     except Exception as e:
         print(f"Error reconnecting to server: {e}")

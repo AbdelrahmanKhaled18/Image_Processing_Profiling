@@ -1,0 +1,1 @@
+INFO:root:Image processed in 0.0105s: 6.039428949356079
