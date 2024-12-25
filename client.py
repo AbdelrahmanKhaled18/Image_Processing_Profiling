@@ -1,4 +1,5 @@
 import json
+import base64
 from tkinter import *
 from tkinter import filedialog
 from tkinter.messagebox import showinfo
@@ -9,7 +10,6 @@ import numpy as np
 SERVER_HOST = "localhost"
 SERVER_PORT = 1234
 
-imgs = []
 client_socket = None
 
 
@@ -49,14 +49,6 @@ def create_form_elements(root):
         highlightbackground="white",
         highlightcolor="white",
     )
-    download_button = Button(
-        root,
-        text="Download Image",
-        command=lambda: download_images(imgs),
-        background="white",
-        highlightbackground="white",
-        highlightcolor="white",
-    )
 
     options = ["edge_detection", "color_inversion", "erosion", "dilation", "adaptive_threshold",
                "histogram_equalization", "sharpen", "gaussian_blur", "enhance"]
@@ -68,7 +60,6 @@ def create_form_elements(root):
     file_button.place(x=287, y=147)
     upload_button.place(x=212, y=200)
     option_menu.place(x=185, y=258)
-    download_button.place(x=197, y=230)
 
 
 def browse_file(file_entry):
@@ -80,53 +71,64 @@ def browse_file(file_entry):
         file_entry.config(state="readonly")
 
 
+def send_json(data):
+    """
+    Send JSON-encoded data to the server.
+    """
+    json_data = json.dumps(data).encode("utf-8")
+    client_socket.sendall(len(json_data).to_bytes(8, byteorder="big"))
+    client_socket.sendall(json_data)
+
+
+def receive_json():
+    """
+    Receive JSON-encoded data from the server.
+    """
+    data_size = int.from_bytes(client_socket.recv(8), byteorder="big")
+    json_data = client_socket.recv(data_size).decode("utf-8")
+    return json.loads(json_data)
+
+
 def upload_file(file_entry, selected_option):
-    global imgs
     file_paths = file_entry.get().strip().split("\n")
 
     if file_paths and any(file_paths):
         try:
-            # Send the selected option
-            client_socket.sendall(selected_option.get().encode())
-            print(f"Sent selected option: {selected_option.get()}")
-
-            # Send the number of images
-            client_socket.sendall(len(file_paths).to_bytes(8, byteorder="big"))
-
+            # Prepare images and metadata
+            images = []
             for file_path in file_paths:
                 # Read the image
                 img = cv2.imread(file_path)
                 if img is None:
                     raise FileNotFoundError(f"Unable to load file: {file_path}")
 
-                # Encode image to bytes
+                # Encode image to base64
                 _, img_encoded = cv2.imencode(".jpg", img)
-                img_bytes = img_encoded.tobytes()
+                img_base64 = base64.b64encode(img_encoded).decode("utf-8")
 
-                # Send the size of the image
-                client_socket.sendall(len(img_bytes).to_bytes(8, byteorder="big"))
+                # Add to image list
+                images.append(img_base64)
 
-                # Send the image bytes
-                client_socket.sendall(img_bytes)
-                print("Image sent to server.")
+            # Create JSON payload
+            payload = {
+                "selected_option": selected_option.get(),
+                "num_images": len(images),
+                "images": images
+            }
 
-                # Receive the size of the processed image
-                bytes_no = int.from_bytes(client_socket.recv(8), byteorder="big")
+            # Send JSON payload
+            send_json(payload)
+            print("Sent JSON payload with images.")
 
-                # Receive the processed image bytes
-                raw_image = b""
-                while len(raw_image) < bytes_no:
-                    bytes_remaining = bytes_no - len(raw_image)
-                    raw_image += client_socket.recv(min(4096, bytes_remaining))
+            # Receive processed data
+            response = receive_json()
+            print("Received response from server.")
 
-                print(f"Received processed image ({len(raw_image)} bytes)")
-
-                # Decode the received image
-                nparr = np.frombuffer(raw_image, np.uint8)
+            # Decode and display images
+            for img_base64 in response.get("processed_images", []):
+                img_data = base64.b64decode(img_base64)
+                nparr = np.frombuffer(img_data, np.uint8)
                 img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-                # Append and display the image
-                imgs.append(img)
                 cv2.imshow("Processed Image", img)
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()

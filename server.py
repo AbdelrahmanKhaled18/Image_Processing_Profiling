@@ -6,6 +6,8 @@ import time
 import threading
 import cProfile
 import pstats
+import json
+import base64
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 1234
@@ -81,36 +83,31 @@ def handle_client(client_socket):
     try:
         log("Started handling client")
 
-        # Receive the selected option
-        selected_option = client_socket.recv(1024).decode()
-        log(f"Received processing option: {selected_option}")
+        # Receive the JSON payload size
+        payload_size = int.from_bytes(client_socket.recv(8), byteorder="big")
+        log(f"Expecting JSON payload of size {payload_size} bytes")
 
-        # Receive the number of images
-        num_images = int.from_bytes(client_socket.recv(8), byteorder="big")
-        log(f"Number of images to process: {num_images}")
+        # Receive the JSON payload
+        payload_data = client_socket.recv(payload_size).decode("utf-8")
+        payload = json.loads(payload_data)
+        log("Received JSON payload")
 
-        for img_index in range(num_images):
-            log(f"Processing image {img_index + 1}/{num_images}")
+        selected_option = payload["selected_option"]
+        images_base64 = payload["images"]
 
-            # Receive the size of the incoming image
-            img_size = int.from_bytes(client_socket.recv(8), byteorder="big")
-            log(f"Expecting {img_size} bytes for the image.")
+        # Process each image
+        processed_images_base64 = []
+        for img_index, img_base64 in enumerate(images_base64):
+            log(f"Processing image {img_index + 1}/{len(images_base64)}")
 
-            # Receive the image bytes
-            raw_image = b""
-            while len(raw_image) < img_size:
-                bytes_remaining = img_size - len(raw_image)
-                raw_image += client_socket.recv(min(4096, bytes_remaining))
-
-            log(f"Received image ({len(raw_image)} bytes)")
-
-            # Decode the image
-            nparr = np.frombuffer(raw_image, np.uint8)
+            # Decode the Base64 image
+            img_data = base64.b64decode(img_base64)
+            nparr = np.frombuffer(img_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             if img is None:
                 log("Failed to decode the received image. Skipping processing.")
-                raise ValueError("Failed to decode the received image.")
+                continue
 
             log(f"Image decoded. Dimensions: {img.shape}")
 
@@ -120,16 +117,21 @@ def handle_client(client_socket):
             processing_time = time.time() - start_time
             log(f"Image processed in {processing_time:.4f}s")
 
-            # Encode the processed image to bytes
+            # Encode the processed image to Base64
             _, img_encoded = cv2.imencode(".jpg", processed_img)
+            processed_base64 = base64.b64encode(img_encoded).decode("utf-8")
+            processed_images_base64.append(processed_base64)
 
-            # Send the size of the processed image
-            client_socket.sendall(len(img_encoded).to_bytes(8, byteorder="big"))
-            log(f"Sent processed image size: {len(img_encoded)} bytes")
+        # Send the response as JSON
+        response = {"processed_images": processed_images_base64}
+        response_data = json.dumps(response).encode("utf-8")
 
-            # Send the processed image bytes
-            client_socket.sendall(img_encoded.tobytes())
-            log("Processed image sent back to client")
+        # Send the size of the JSON response
+        client_socket.sendall(len(response_data).to_bytes(8, byteorder="big"))
+
+        # Send the JSON response
+        client_socket.sendall(response_data)
+        log("Processed images sent back to client")
 
     except Exception as e:
         log(f"Error handling client: {e}")
