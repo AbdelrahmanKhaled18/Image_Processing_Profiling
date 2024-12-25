@@ -50,8 +50,17 @@ def create_form_elements(root):
         highlightcolor="white",
     )
 
-    options = ["edge_detection", "color_inversion", "erosion", "dilation", "adaptive_threshold",
-               "histogram_equalization", "sharpen", "gaussian_blur", "enhance"]
+    options = [
+        "edge_detection",
+        "color_inversion",
+        "erosion",
+        "dilation",
+        "adaptive_threshold",
+        "histogram_equalization",
+        "sharpen",
+        "gaussian_blur",
+        "enhance",
+    ]
     selected_option = StringVar()
     selected_option.set(options[0])
     option_menu = OptionMenu(root, selected_option, *options)
@@ -158,13 +167,20 @@ def download_images(images):
     valid_extensions = [".jpg", ".jpeg", ".png"]
     for i, img in enumerate(images):
         file_extension = ".jpg"  # Default file extension
-        save_path = filedialog.asksaveasfilename(defaultextension=file_extension,
-                                                 filetypes=[("JPEG files", "*.jpg"), ("PNG files", "*.png"),
-                                                            ("All files", "*.*")])
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=file_extension,
+            filetypes=[
+                ("JPEG files", "*.jpg"),
+                ("PNG files", "*.png"),
+                ("All files", "*.*"),
+            ],
+        )
 
         # Ensure the save_path has a valid extension
         if not any(save_path.lower().endswith(ext) for ext in valid_extensions):
-            save_path += file_extension  # Default to .jpg if no valid extension is found
+            save_path += (
+                file_extension  # Default to .jpg if no valid extension is found
+            )
 
         try:
             cv2.imwrite(save_path, img)
