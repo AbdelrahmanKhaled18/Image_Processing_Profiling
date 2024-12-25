@@ -1,18 +1,30 @@
 import json
+import base64
 from tkinter import *
 from tkinter import filedialog
 from tkinter.messagebox import showinfo
 import socket
-
 import cv2
 import numpy as np
 
-SERVER_HOST = "40.127.9.222"
-SERVER_PORT = 12345
+SERVER_HOST = "localhost"
+SERVER_PORT = 1234
 
-imgs = []
-client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client_socket.connect((SERVER_HOST, SERVER_PORT))
+client_socket = None
+
+
+def connect_to_server():
+    global client_socket
+    try:
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((SERVER_HOST, SERVER_PORT))
+        print("Connected to the server")
+    except Exception as e:
+        print(f"Error connecting to the server: {e}")
+        showinfo("Error", "Failed to connect to the server.")
+
+
+connect_to_server()
 
 
 def create_form_elements(root):
@@ -37,14 +49,6 @@ def create_form_elements(root):
         highlightbackground="white",
         highlightcolor="white",
     )
-    download_button = Button(
-        root,
-        text="Download Image",
-        command=lambda: download_images(imgs),
-        background="white",
-        highlightbackground="white",
-        highlightcolor="white",
-    )
 
     options = ["edge_detection", "color_inversion", "erosion", "dilation", "adaptive_threshold",
                "histogram_equalization", "sharpen", "gaussian_blur", "enhance"]
@@ -56,7 +60,6 @@ def create_form_elements(root):
     file_button.place(x=287, y=147)
     upload_button.place(x=212, y=200)
     option_menu.place(x=185, y=258)
-    download_button.place(x=197, y=230)
 
 
 def browse_file(file_entry):
@@ -68,59 +71,80 @@ def browse_file(file_entry):
         file_entry.config(state="readonly")
 
 
+def send_json(data):
+    """
+    Send JSON-encoded data to the server.
+    """
+    json_data = json.dumps(data).encode("utf-8")
+    client_socket.sendall(len(json_data).to_bytes(8, byteorder="big"))
+    client_socket.sendall(json_data)
+
+
+def receive_json():
+    """
+    Receive JSON-encoded data from the server.
+    """
+    data_size = int.from_bytes(client_socket.recv(8), byteorder="big")
+    json_data = client_socket.recv(data_size).decode("utf-8")
+    return json.loads(json_data)
+
+
 def upload_file(file_entry, selected_option):
-    global imgs
     file_paths = file_entry.get().strip().split("\n")
 
     if file_paths and any(file_paths):
         try:
-            client_socket.sendall(selected_option.get().encode())
-            # Send number of images
-            client_socket.sendall(len(file_paths).to_bytes(8, byteorder="big"))
-            images = [cv2.imread(file_path) for file_path in file_paths]
-            image_sizes = [img.shape[0:2] for img in images]
-            for img in images:
-                # Send number of rows in image
-                client_socket.sendall(img.shape[0].to_bytes(8, byteorder="big"))
-                # Send number of columns in image
-                client_socket.sendall(img.shape[1].to_bytes(8, byteorder="big"))
+            # Prepare images and metadata
+            images = []
+            for file_path in file_paths:
+                # Read the image
+                img = cv2.imread(file_path)
+                if img is None:
+                    raise FileNotFoundError(f"Unable to load file: {file_path}")
 
-                # Send image as bytes
-                client_socket.sendall(img.astype(np.ubyte).tobytes())
+                # Encode image to base64
+                _, img_encoded = cv2.imencode(".jpg", img)
+                img_base64 = base64.b64encode(img_encoded).decode("utf-8")
 
-            print("Sent full data")
-            imgs = []  # Reset the list of images
-            for i in range(len(images)):
-                rows, cols = image_sizes[i]
-                bytes_no = rows * cols * 3
-                raw_image = b""
-                while len(raw_image) < bytes_no:
-                    bytes_remaining = bytes_no - len(raw_image)
-                    bytes_to_recv = 4096 if bytes_remaining > 4096 else bytes_remaining
-                    raw_image += client_socket.recv(bytes_to_recv)
-                imgs.append(np.frombuffer(raw_image, dtype=np.ubyte).reshape(rows, cols, 3).astype(np.uint8))
+                # Add to image list
+                images.append(img_base64)
 
-            for img in imgs:
-                # Display the concatenated image
+            # Create JSON payload
+            payload = {
+                "selected_option": selected_option.get(),
+                "num_images": len(images),
+                "images": images
+            }
+
+            # Send JSON payload
+            send_json(payload)
+            print("Sent JSON payload with images.")
+
+            # Receive processed data
+            response = receive_json()
+            print("Received response from server.")
+
+            # Decode and display images
+            for img_base64 in response.get("processed_images", []):
+                img_data = base64.b64decode(img_base64)
+                nparr = np.frombuffer(img_data, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                 cv2.imshow("Processed Image", img)
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()
+
             showinfo("Success", "Files have been uploaded and displayed.")
 
         except FileNotFoundError as e:
-            showinfo("Error", f"File not found: {e}")
+            showinfo("Error", str(e))
         except OSError as e:
-            if e.errno == 10058 or e.errno == 10057 or e.errno == 10053:
-                showinfo("Error", "Reconnecting to the Server...\n You can upload now!")
-                reconnect_to_server()
-            else:
-                showinfo("Error", f"An error occurred: {e}. Please reconnect to the server.")
-                reconnect_to_server()
+            print(f"Connection error: {e}")
+            reconnect_to_server()
         except BrokenPipeError as e:
+            print(f"Broken pipe error: {e}")
             reconnect_to_server()
     else:
         showinfo("Error", "Please select one or more files to upload.")
-        return
 
 
 def download_images(images):
@@ -163,8 +187,6 @@ def reconnect_to_server():
 
     try:
         # Reconnect to the server
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((SERVER_HOST, SERVER_PORT))
-        print("Reconnected to the server")
+        connect_to_server()
     except Exception as e:
         print(f"Error reconnecting to server: {e}")
