@@ -1,5 +1,4 @@
 import os
-import os
 import socket
 import cv2
 import numpy as np
@@ -12,24 +11,16 @@ import json
 import base64
 from multiprocessing.pool import ThreadPool
 from functools import partial
+from recvall import recvall
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 1234
 # Number of threads to use for image processing
 # The number of threads is the square of this constant
 THREADS_DIMENSION = 3
-# Number of threads to use for image processing
-# The number of threads is the square of this constant
-THREADS_DIMENSION = 3
 
 # Initialize logging
 initTime = time.time()
-logging.basicConfig(
-    filename="log.txt",
-    filemode="w",
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
 logging.basicConfig(
     filename="log.txt",
     filemode="w",
@@ -90,36 +81,10 @@ def process_image(decoded_chunk, selected_option):
             processed_chunk = decoded_chunk
 
         log("Processing for thread completed")
-        log("Processing for thread completed")
         return processed_chunk
     except Exception as e:
         log(f"Error processing image: {e}")
         return decoded_chunk
-
-
-def divide_chunks(img):
-    chunks = []
-    for i in range(THREADS_DIMENSION):
-        for j in range(THREADS_DIMENSION):
-            top_bound = img.shape[0] * i // THREADS_DIMENSION
-            lower_bound = min(img.shape[0] * (i + 1) // THREADS_DIMENSION, img.shape[0])
-            left_bound = img.shape[1] * j // THREADS_DIMENSION
-            right_bound = min(img.shape[1] * (j + 1) // THREADS_DIMENSION, img.shape[1])
-            chunk = img[
-                top_bound:lower_bound,
-                left_bound:right_bound,
-            ]
-            chunks.append(chunk)
-    return chunks
-
-
-def combine_chunks(chunks):
-    rows = []
-    for i in range(THREADS_DIMENSION):
-        row_chunks = chunks[i * THREADS_DIMENSION : (i + 1) * THREADS_DIMENSION]
-        row = np.concatenate(row_chunks, axis=1)
-        rows.append(row)
-    return np.concatenate(rows, axis=0)
 
 
 def divide_chunks(img):
@@ -159,7 +124,7 @@ def handle_client(client_socket):
         log(f"Expecting JSON payload of size {payload_size} bytes")
 
         # Receive the JSON payload
-        payload_data = client_socket.recv(payload_size).decode("utf-8")
+        payload_data = recvall(client_socket, payload_size).decode("utf-8")
         payload = json.loads(payload_data)
         log("Received JSON payload")
 
@@ -183,15 +148,7 @@ def handle_client(client_socket):
             log(f"Image decoded. Dimensions: {img.shape}")
 
             # Process the image across threads
-            # Process the image across threads
             start_time = time.time()
-            divided_image = divide_chunks(img)
-            with ThreadPool(processes=THREADS_DIMENSION**2) as pool:
-                processed_chunks = pool.map(
-                    partial(process_image, selected_option=selected_option),
-                    divided_image,
-                )
-            processed_img = combine_chunks(processed_chunks)
             divided_image = divide_chunks(img)
             with ThreadPool(processes=THREADS_DIMENSION**2) as pool:
                 processed_chunks = pool.map(
@@ -240,9 +197,6 @@ def main():
             client_thread = threading.Thread(
                 target=handle_client, args=(client_socket,), daemon=True
             )
-            client_thread = threading.Thread(
-                target=handle_client, args=(client_socket,), daemon=True
-            )
             client_thread.start()
 
     except Exception as e:
@@ -263,8 +217,6 @@ if __name__ == "__main__":
         log("Saving profiling results...")
         profiler.disable()
         try:
-            dir = os.path.dirname(__file__)
-            file_path = os.path.join(dir, "profiling_results.txt")
             dir = os.path.dirname(__file__)
             file_path = os.path.join(dir, "profiling_results.txt")
             with open(file_path, "w") as f:
