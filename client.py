@@ -1,3 +1,4 @@
+import os
 import json
 import base64
 from tkinter import *
@@ -9,7 +10,7 @@ import numpy as np
 from recvall import recvall
 
 SERVER_HOST = "localhost"
-SERVER_PORT = 1234
+SERVER_PORT = 1420
 
 client_socket = None
 
@@ -136,11 +137,6 @@ def upload_file(file_paths, selected_option):
                 img_data = base64.b64decode(img_base64)
                 nparr = np.frombuffer(img_data, np.uint8)
                 img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                cv2.imshow("Processed Image", img)
-                cv2.waitKey(0)
-                cv2.destroyAllWindows()
-
-            showinfo("Success", "Files have been uploaded and displayed.")
 
         except FileNotFoundError as e:
             showinfo("Error", str(e))
@@ -204,3 +200,21 @@ def reconnect_to_server():
         connect_to_server()
     except Exception as e:
         print(f"Error reconnecting to server: {e}")
+
+
+if __name__ == "__main__":
+    img_names = [
+        "Screenshot_453.png",
+        "Screenshot_454.png",
+        "Screenshot_455.png",
+        "Screenshot_456.png",
+        "Screenshot_457.png",
+        "Screenshot_459.png",
+    ]
+
+    dir = os.path.dirname(__file__)
+    img_paths_list = [os.path.join(dir, "static", img_name) for img_name in img_names]
+    img_paths_string = "\n".join(img_paths_list)
+    selected_option = "enhance"
+    connect_to_server()
+    upload_file(img_paths_string, selected_option)

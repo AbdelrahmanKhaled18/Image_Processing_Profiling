@@ -17,7 +17,7 @@ from recvall import recvall
 
 dir = os.path.dirname(__file__)
 SERVER_HOST = "localhost"
-SERVER_PORT = 1234
+SERVER_PORT = 1420
 THREADS_DIMENSION = 3
 
 # Initialize logging
