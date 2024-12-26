@@ -6,6 +6,7 @@ from tkinter.messagebox import showinfo
 import socket
 import cv2
 import numpy as np
+from recvall import recvall
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 1234
@@ -22,9 +23,6 @@ def connect_to_server():
     except Exception as e:
         print(f"Error connecting to the server: {e}")
         showinfo("Error", "Failed to connect to the server.")
-
-
-connect_to_server()
 
 
 def create_form_elements(root):
@@ -44,14 +42,23 @@ def create_form_elements(root):
     upload_button = Button(
         root,
         text="Upload File",
-        command=lambda: upload_file(file_entry, selected_option),
+        command=lambda: upload_file(file_entry.get().strip(), selected_option.get()),
         background="white",
         highlightbackground="white",
         highlightcolor="white",
     )
 
-    options = ["edge_detection", "color_inversion", "erosion", "dilation", "adaptive_threshold",
-               "histogram_equalization", "sharpen", "gaussian_blur", "enhance"]
+    options = [
+        "edge_detection",
+        "color_inversion",
+        "erosion",
+        "dilation",
+        "adaptive_threshold",
+        "histogram_equalization",
+        "sharpen",
+        "gaussian_blur",
+        "enhance",
+    ]
     selected_option = StringVar()
     selected_option.set(options[0])
     option_menu = OptionMenu(root, selected_option, *options)
@@ -85,12 +92,12 @@ def receive_json():
     Receive JSON-encoded data from the server.
     """
     data_size = int.from_bytes(client_socket.recv(8), byteorder="big")
-    json_data = client_socket.recv(data_size).decode("utf-8")
+    json_data = recvall(client_socket, data_size).decode("utf-8")
     return json.loads(json_data)
 
 
-def upload_file(file_entry, selected_option):
-    file_paths = file_entry.get().strip().split("\n")
+def upload_file(file_paths, selected_option):
+    file_paths = file_paths.split("\n")
 
     if file_paths and any(file_paths):
         try:
@@ -111,9 +118,9 @@ def upload_file(file_entry, selected_option):
 
             # Create JSON payload
             payload = {
-                "selected_option": selected_option.get(),
+                "selected_option": selected_option,
                 "num_images": len(images),
-                "images": images
+                "images": images,
             }
 
             # Send JSON payload
@@ -158,13 +165,20 @@ def download_images(images):
     valid_extensions = [".jpg", ".jpeg", ".png"]
     for i, img in enumerate(images):
         file_extension = ".jpg"  # Default file extension
-        save_path = filedialog.asksaveasfilename(defaultextension=file_extension,
-                                                 filetypes=[("JPEG files", "*.jpg"), ("PNG files", "*.png"),
-                                                            ("All files", "*.*")])
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=file_extension,
+            filetypes=[
+                ("JPEG files", "*.jpg"),
+                ("PNG files", "*.png"),
+                ("All files", "*.*"),
+            ],
+        )
 
         # Ensure the save_path has a valid extension
         if not any(save_path.lower().endswith(ext) for ext in valid_extensions):
-            save_path += file_extension  # Default to .jpg if no valid extension is found
+            save_path += (
+                file_extension  # Default to .jpg if no valid extension is found
+            )
 
         try:
             cv2.imwrite(save_path, img)
