@@ -9,14 +9,13 @@ import cProfile
 import pstats
 import json
 import base64
+import subprocess
 from multiprocessing.pool import ThreadPool
 from functools import partial
 from recvall import recvall
 
 SERVER_HOST = "localhost"
 SERVER_PORT = 1234
-# Number of threads to use for image processing
-# The number of threads is the square of this constant
 THREADS_DIMENSION = 3
 
 # Initialize logging
@@ -34,9 +33,6 @@ def log(step: str):
 
 
 def process_image(decoded_chunk, selected_option):
-    """
-    Process the image chunk based on the selected option.
-    """
     try:
         log(f"Processing image with option {selected_option}")
 
@@ -96,9 +92,9 @@ def divide_chunks(img):
             left_bound = img.shape[1] * j // THREADS_DIMENSION
             right_bound = min(img.shape[1] * (j + 1) // THREADS_DIMENSION, img.shape[1])
             chunk = img[
-                top_bound:lower_bound,
-                left_bound:right_bound,
-            ]
+                    top_bound:lower_bound,
+                    left_bound:right_bound,
+                    ]
             chunks.append(chunk)
     return chunks
 
@@ -106,24 +102,19 @@ def divide_chunks(img):
 def combine_chunks(chunks):
     rows = []
     for i in range(THREADS_DIMENSION):
-        row_chunks = chunks[i * THREADS_DIMENSION : (i + 1) * THREADS_DIMENSION]
+        row_chunks = chunks[i * THREADS_DIMENSION: (i + 1) * THREADS_DIMENSION]
         row = np.concatenate(row_chunks, axis=1)
         rows.append(row)
     return np.concatenate(rows, axis=0)
 
 
 def handle_client(client_socket):
-    """
-    Handles a single client request.
-    """
     try:
         log("Started handling client")
 
-        # Receive the JSON payload size
         payload_size = int.from_bytes(client_socket.recv(8), byteorder="big")
         log(f"Expecting JSON payload of size {payload_size} bytes")
 
-        # Receive the JSON payload
         payload_data = recvall(client_socket, payload_size).decode("utf-8")
         payload = json.loads(payload_data)
         log("Received JSON payload")
@@ -131,12 +122,10 @@ def handle_client(client_socket):
         selected_option = payload["selected_option"]
         images_base64 = payload["images"]
 
-        # Process each image
         processed_images_base64 = []
         for img_index, img_base64 in enumerate(images_base64):
             log(f"Processing image {img_index + 1}/{len(images_base64)}")
 
-            # Decode the Base64 image
             img_data = base64.b64decode(img_base64)
             nparr = np.frombuffer(img_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -147,10 +136,9 @@ def handle_client(client_socket):
 
             log(f"Image decoded. Dimensions: {img.shape}")
 
-            # Process the image across threads
             start_time = time.time()
             divided_image = divide_chunks(img)
-            with ThreadPool(processes=THREADS_DIMENSION**2) as pool:
+            with ThreadPool(processes=THREADS_DIMENSION ** 2) as pool:
                 processed_chunks = pool.map(
                     partial(process_image, selected_option=selected_option),
                     divided_image,
@@ -158,19 +146,15 @@ def handle_client(client_socket):
             processed_img = combine_chunks(processed_chunks)
             processing_time = time.time() - start_time
             log(f"Image completely processed in {processing_time:.4f}s")
-            # Encode the processed image to Base64
+
             _, img_encoded = cv2.imencode(".jpg", processed_img)
             processed_base64 = base64.b64encode(img_encoded).decode("utf-8")
             processed_images_base64.append(processed_base64)
 
-        # Send the response as JSON
         response = {"processed_images": processed_images_base64}
         response_data = json.dumps(response).encode("utf-8")
 
-        # Send the size of the JSON response
         client_socket.sendall(len(response_data).to_bytes(8, byteorder="big"))
-
-        # Send the JSON response
         client_socket.sendall(response_data)
         log("Processed images sent back to client")
 
@@ -182,9 +166,6 @@ def handle_client(client_socket):
 
 
 def main():
-    """
-    Main server loop that accepts connections and handles clients.
-    """
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((SERVER_HOST, SERVER_PORT))
     server_socket.listen(5)
@@ -214,17 +195,28 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"Unhandled exception in main: {e}")
     finally:
-        log("Saving profiling results...")
         profiler.disable()
+        profiling_path = os.path.join(os.path.dirname(__file__), "profiling_results.prof")
+        profiler.dump_stats(profiling_path)
+
+        log(f"Profiling results saved to {profiling_path}")
+
+        detailed_stats_path = os.path.join(os.path.dirname(__file__), "profiling_results.txt")
+        with open(detailed_stats_path, "w") as f:
+            stats = pstats.Stats(profiler, stream=f)
+            stats.strip_dirs()
+            stats.sort_stats("cumulative")
+            stats.print_stats()
+            stats.print_callers()
+            stats.print_callees()
+        log(f"Detailed profiling results saved to {detailed_stats_path}")
+
         try:
-            dir = os.path.dirname(__file__)
-            file_path = os.path.join(dir, "profiling_results.txt")
-            with open(file_path, "w") as f:
-                stats = pstats.Stats(profiler, stream=f)
-                stats.strip_dirs()
-                stats.sort_stats("cumtime")
-                stats.print_stats()
-            log(f"Profiling results saved to {file_path}")
+            log("Launching Snakeviz for detailed profiling visualization...")
+            subprocess.run(["snakeviz", profiling_path])
+        except FileNotFoundError:
+            log("Snakeviz is not installed. Please install it using 'pip install snakeviz'.")
         except Exception as e:
-            log(f"Error saving profiling results: {e}")
+            log(f"Error launching Snakeviz: {e}")
+
         log("Shutting down the server...")
