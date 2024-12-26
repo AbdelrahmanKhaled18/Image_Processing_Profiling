@@ -10,10 +10,12 @@ import pstats
 import json
 import base64
 import subprocess
+import sys
 from multiprocessing.pool import ThreadPool
 from functools import partial
 from recvall import recvall
 
+dir = os.path.dirname(__file__)
 SERVER_HOST = "localhost"
 SERVER_PORT = 1234
 THREADS_DIMENSION = 3
@@ -92,9 +94,9 @@ def divide_chunks(img):
             left_bound = img.shape[1] * j // THREADS_DIMENSION
             right_bound = min(img.shape[1] * (j + 1) // THREADS_DIMENSION, img.shape[1])
             chunk = img[
-                    top_bound:lower_bound,
-                    left_bound:right_bound,
-                    ]
+                top_bound:lower_bound,
+                left_bound:right_bound,
+            ]
             chunks.append(chunk)
     return chunks
 
@@ -102,7 +104,7 @@ def divide_chunks(img):
 def combine_chunks(chunks):
     rows = []
     for i in range(THREADS_DIMENSION):
-        row_chunks = chunks[i * THREADS_DIMENSION: (i + 1) * THREADS_DIMENSION]
+        row_chunks = chunks[i * THREADS_DIMENSION : (i + 1) * THREADS_DIMENSION]
         row = np.concatenate(row_chunks, axis=1)
         rows.append(row)
     return np.concatenate(rows, axis=0)
@@ -138,7 +140,7 @@ def handle_client(client_socket):
 
             start_time = time.time()
             divided_image = divide_chunks(img)
-            with ThreadPool(processes=THREADS_DIMENSION ** 2) as pool:
+            with ThreadPool(processes=THREADS_DIMENSION**2) as pool:
                 processed_chunks = pool.map(
                     partial(process_image, selected_option=selected_option),
                     divided_image,
@@ -165,6 +167,36 @@ def handle_client(client_socket):
         log("Client connection closed")
 
 
+def register_profiling(profiler):
+    profiler.disable()
+    profiling_path = os.path.join(dir, "profiling_results.prof")
+    profiler.dump_stats(profiling_path)
+
+    log(f"Profiling results saved to {profiling_path}")
+
+    detailed_stats_path = os.path.join(dir, "profiling_results.txt")
+    with open(detailed_stats_path, "w") as f:
+        stats = pstats.Stats(profiler, stream=f)
+        stats.strip_dirs()
+        stats.sort_stats("cumulative")
+        stats.print_stats()
+        stats.print_callers()
+        stats.print_callees()
+    log(f"Detailed profiling results saved to {detailed_stats_path}")
+
+    try:
+        log("Launching Snakeviz for detailed profiling visualization...")
+        subprocess.run(["snakeviz", profiling_path])
+    except FileNotFoundError:
+        log(
+            "Snakeviz is not installed. Please install it using 'pip install snakeviz'."
+        )
+    except Exception as e:
+        log(f"Error launching Snakeviz: {e}")
+    print("You pressed Ctrl+C!")
+    sys.exit(0)
+
+
 def main():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((SERVER_HOST, SERVER_PORT))
@@ -173,13 +205,19 @@ def main():
 
     try:
         while True:
-            client_socket, client_address = server_socket.accept()
-            log(f"Connection from {client_address}")
-            client_thread = threading.Thread(
-                target=handle_client, args=(client_socket,), daemon=True
-            )
-            client_thread.start()
+            try:
+                server_socket.settimeout(1)
+                client_socket, client_address = server_socket.accept()
+                log(f"Connection from {client_address}")
+                client_thread = threading.Thread(
+                    target=handle_client, args=(client_socket,), daemon=True
+                )
+                client_thread.start()
+            except socket.timeout:
+                pass
 
+    except KeyboardInterrupt:
+        pass
     except Exception as e:
         log(f"Unhandled exception: {e}")
     finally:
@@ -192,31 +230,10 @@ if __name__ == "__main__":
     try:
         profiler.enable()
         main()
+    except KeyboardInterrupt:
+        pass
     except Exception as e:
         log(f"Unhandled exception in main: {e}")
     finally:
-        profiler.disable()
-        profiling_path = os.path.join(os.path.dirname(__file__), "profiling_results.prof")
-        profiler.dump_stats(profiling_path)
-
-        log(f"Profiling results saved to {profiling_path}")
-
-        detailed_stats_path = os.path.join(os.path.dirname(__file__), "profiling_results.txt")
-        with open(detailed_stats_path, "w") as f:
-            stats = pstats.Stats(profiler, stream=f)
-            stats.strip_dirs()
-            stats.sort_stats("cumulative")
-            stats.print_stats()
-            stats.print_callers()
-            stats.print_callees()
-        log(f"Detailed profiling results saved to {detailed_stats_path}")
-
-        try:
-            log("Launching Snakeviz for detailed profiling visualization...")
-            subprocess.run(["snakeviz", profiling_path])
-        except FileNotFoundError:
-            log("Snakeviz is not installed. Please install it using 'pip install snakeviz'.")
-        except Exception as e:
-            log(f"Error launching Snakeviz: {e}")
-
+        register_profiling(profiler)
         log("Shutting down the server...")
