@@ -1,18 +1,16 @@
 import os
-import json
-import base64
 from tkinter import *
 from tkinter import filedialog
 from tkinter.messagebox import showinfo
 import socket
 import cv2
 import numpy as np
-from recvall import recvall
-
-SERVER_HOST = "localhost"
-SERVER_PORT = 1420
+import json
+import base64
+from communication_helper import *
 
 client_socket = None
+processed_images = []
 
 
 def connect_to_server():
@@ -26,75 +24,69 @@ def connect_to_server():
         showinfo("Error", "Failed to connect to the server.")
 
 
-def create_form_elements(root):
-    """
-    Create form elements such as labels, buttons, and entry fields.
-    """
-    file_label = Label(root, text="File:", background="#0078D4", font="bold")
-    file_entry = Entry(root, state="readonly")
-    file_button = Button(
-        root,
-        text="Browse",
-        command=lambda: browse_file(file_entry),
-        background="white",
-        highlightbackground="white",
-        highlightcolor="white",
-    )
-    upload_button = Button(
-        root,
-        text="Upload File",
-        command=lambda: upload_file(file_entry.get().strip(), selected_option.get()),
-        background="white",
-        highlightbackground="white",
-        highlightcolor="white",
-    )
+def send_json(client_socket: socket.socket, images, selected_option):
+    encoded_images = []
+    for img in images:
+        # Encode images to base64
+        _, img_encoded = cv2.imencode(".jpg", img)
+        img_base64 = base64.b64encode(img_encoded).decode("utf-8")
+        encoded_images.append(img_base64)
 
-    options = [
-        "edge_detection",
-        "color_inversion",
-        "erosion",
-        "dilation",
-        "adaptive_threshold",
-        "histogram_equalization",
-        "sharpen",
-        "gaussian_blur",
-        "enhance",
-    ]
-    selected_option = StringVar()
-    selected_option.set(options[0])
-    option_menu = OptionMenu(root, selected_option, *options)
-    file_label.place(x=110, y=144)
-    file_entry.place(x=160, y=150)
-    file_button.place(x=287, y=147)
-    upload_button.place(x=212, y=200)
-    option_menu.place(x=185, y=258)
+    # Create JSON payload
+    payload = {
+        "selected_option": selected_option,
+        "num_images": len(images),
+        "images": encoded_images,
+    }
 
-
-def browse_file(file_entry):
-    file_paths = filedialog.askopenfilenames()
-    if file_paths:
-        file_entry.config(state="normal")
-        file_entry.delete(0, "end")
-        file_entry.insert(0, "\n".join(file_paths))
-        file_entry.config(state="readonly")
-
-
-def send_json(data):
-    """
-    Send JSON-encoded data to the server.
-    """
-    json_data = json.dumps(data).encode("utf-8")
+    # Send JSON-encoded data to the server.
+    json_data = json.dumps(payload).encode("utf-8")
     client_socket.sendall(len(json_data).to_bytes(8, byteorder="big"))
     client_socket.sendall(json_data)
 
 
-def receive_json():
-    """
-    Receive JSON-encoded data from the server.
-    """
+def receive_json(client_socket: socket.socket):
+    # Receive JSON-encoded data from the server.
     data_size = int.from_bytes(client_socket.recv(8), byteorder="big")
-    json_data = recvall(client_socket, data_size).decode("utf-8")
-    return json.loads(json_data)
+    raw_data = recvall(client_socket, data_size).decode("utf-8")
+    json_data = json.loads(raw_data)
+
+    images = []
+    for img_base64 in json_data.get("processed_images", []):
+        img_data = base64.b64decode(img_base64)
+        nparr = np.frombuffer(img_data, np.uint8)
+        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        images.append(image)
+    return images
+
+
+def send_raw_bytes(client_socket: socket.socket, images, selected_option):
+    client_socket.sendall(selected_option.encode())
+
+    # Send number of images
+    client_socket.sendall(len(images).to_bytes(8, byteorder="big"))
+    for img in images:
+        # Send number of rows in image
+        client_socket.sendall(img.shape[0].to_bytes(8, byteorder="big"))
+        # Send number of columns in image
+        client_socket.sendall(img.shape[1].to_bytes(8, byteorder="big"))
+
+        # Send image as bytes
+        client_socket.sendall(img.astype(np.ubyte).tobytes())
+
+
+def receive_raw_bytes(client_socket: socket.socket, image_sizes):
+    images = []  # Reset the list of images
+    for image_size in image_sizes:
+        rows, cols = image_size
+        bytes_no = rows * cols * 3
+        raw_image = recvall(client_socket, bytes_no)
+        images.append(
+            np.frombuffer(raw_image, dtype=np.ubyte)
+            .reshape(rows, cols, 3)
+            .astype(np.uint8)
+        )
+    return images
 
 
 def upload_file(file_paths, selected_option):
@@ -103,40 +95,23 @@ def upload_file(file_paths, selected_option):
     if file_paths and any(file_paths):
         try:
             # Prepare images and metadata
-            images = []
-            for file_path in file_paths:
-                # Read the image
-                img = cv2.imread(file_path)
-                if img is None:
-                    raise FileNotFoundError(f"Unable to load file: {file_path}")
+            images = [cv2.imread(p) for p in file_paths]
 
-                # Encode image to base64
-                _, img_encoded = cv2.imencode(".jpg", img)
-                img_base64 = base64.b64encode(img_encoded).decode("utf-8")
+            # Send images to the server
+            if PROTOCOL == Protocol.JSON:
+                send_json(client_socket, images, selected_option)
+            if PROTOCOL == Protocol.BYTES:
+                send_raw_bytes(client_socket, images, selected_option)
+            print("Sent all images to the server.")
 
-                # Add to image list
-                images.append(img_base64)
-
-            # Create JSON payload
-            payload = {
-                "selected_option": selected_option,
-                "num_images": len(images),
-                "images": images,
-            }
-
-            # Send JSON payload
-            send_json(payload)
-            print("Sent JSON payload with images.")
-
-            # Receive processed data
-            response = receive_json()
-            print("Received response from server.")
-
-            # Decode and display images
-            for img_base64 in response.get("processed_images", []):
-                img_data = base64.b64decode(img_base64)
-                nparr = np.frombuffer(img_data, np.uint8)
-                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            # Receive processed images from the sever
+            global processed_images
+            if PROTOCOL == Protocol.JSON:
+                processed_images = receive_json(client_socket)
+            if PROTOCOL == Protocol.BYTES:
+                image_sizes = [img.shape[0:2] for img in images]
+                processed_images = receive_raw_bytes(client_socket, image_sizes)
+            print("Received processed images from server.")
 
         except FileNotFoundError as e:
             showinfo("Error", str(e))
@@ -151,9 +126,8 @@ def upload_file(file_paths, selected_option):
 
 
 def download_images(images):
-    """
-    Download the processed images.
-    """
+    # Download the processed images.
+
     if not images:
         showinfo("Error", "No images to download.")
         return
@@ -172,9 +146,8 @@ def download_images(images):
 
         # Ensure the save_path has a valid extension
         if not any(save_path.lower().endswith(ext) for ext in valid_extensions):
-            save_path += (
-                file_extension  # Default to .jpg if no valid extension is found
-            )
+            # Default to .jpg if no valid extension is found
+            save_path += file_extension
 
         try:
             cv2.imwrite(save_path, img)
