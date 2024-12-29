@@ -1,23 +1,16 @@
-import os
 import socket
 import cv2
 import numpy as np
 import logging
 import time
 import threading
-import cProfile
-import pstats
 import json
 import base64
 from multiprocessing.pool import ThreadPool
 from functools import partial
-from recvall import recvall
+from communication_helper import *
 
-SERVER_HOST = "localhost"
-SERVER_PORT = 1234
-# Number of threads to use for image processing
-# The number of threads is the square of this constant
-THREADS_DIMENSION = 3
+THREADS_DIMENSION = 5
 
 # Initialize logging
 initTime = time.time()
@@ -34,9 +27,6 @@ def log(step: str):
 
 
 def process_image(decoded_chunk, selected_option):
-    """
-    Process the image chunk based on the selected option.
-    """
     try:
         log(f"Processing image with option {selected_option}")
 
@@ -112,42 +102,88 @@ def combine_chunks(chunks):
     return np.concatenate(rows, axis=0)
 
 
+def receive_json(client_socket: socket.socket):
+    payload_size = int.from_bytes(client_socket.recv(8), byteorder="big")
+    log(f"Expecting JSON payload of size {payload_size} bytes")
+
+    payload_data = recvall(client_socket, payload_size).decode("utf-8")
+    payload = json.loads(payload_data)
+    log("Received JSON payload")
+
+    selected_option = payload["selected_option"]
+    images_base64 = payload["images"]
+
+    decoded_images = []
+    for img_base64 in images_base64:
+        img_data = base64.b64decode(img_base64)
+        nparr = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+        if img is None:
+            log("Failed to decode the received image. Skipping processing.")
+            continue
+
+        decoded_images.append(img)
+        log(f"Image decoded. Dimensions: {img.shape}")
+    return (selected_option, decoded_images)
+
+
+def send_json(client_socket: socket.socket, images):
+    processed_images_base64 = []
+    for image in images:
+        _, img_encoded = cv2.imencode(".jpg", image)
+        processed_base64 = base64.b64encode(img_encoded).decode("utf-8")
+        processed_images_base64.append(processed_base64)
+
+    response = {"processed_images": processed_images_base64}
+    response_data = json.dumps(response).encode("utf-8")
+    client_socket.sendall(len(response_data).to_bytes(8, byteorder="big"))
+    client_socket.sendall(response_data)
+
+
+def receive_raw_bytes(client_socket: socket.socket):
+    selected_option = client_socket.recv(1024).decode()
+    log("Selected option received")
+    images_no = int.from_bytes(client_socket.recv(8), byteorder="big")
+    log("Number of images received")
+
+    decoded_images = []
+    for _ in range(images_no):
+        rows = int.from_bytes(client_socket.recv(8), byteorder="big")
+        cols = int.from_bytes(client_socket.recv(8), byteorder="big")
+        bytes_no = rows * cols * 3
+
+        raw_image = recvall(client_socket, bytes_no)
+        log(f"Image received")
+
+        decoded_image = (
+            np.frombuffer(raw_image, dtype=np.ubyte)
+            .reshape(rows, cols, 3)
+            .astype(np.uint8)
+        )
+        decoded_images.append(decoded_image)
+        log(f"Image decoded. Dimensions: {decoded_image.shape}")
+
+    log(f"All images received and formatted")
+    return (selected_option, decoded_images)
+
+
+def send_raw_bytes(client_socket: socket.socket, images):
+    for img in images:
+        client_socket.sendall(img.astype(np.ubyte).tobytes())
+
+
 def handle_client(client_socket):
-    """
-    Handles a single client request.
-    """
     try:
-        log("Started handling client")
+        if PROTOCOL == Protocol.JSON:
+            selected_option, images = receive_json(client_socket)
+        if PROTOCOL == Protocol.BYTES:
+            selected_option, images = receive_raw_bytes(client_socket)
 
-        # Receive the JSON payload size
-        payload_size = int.from_bytes(client_socket.recv(8), byteorder="big")
-        log(f"Expecting JSON payload of size {payload_size} bytes")
+        processed_images = []
+        for img_index, img in enumerate(images):
+            log(f"Processing image {img_index + 1}/{len(images)}")
 
-        # Receive the JSON payload
-        payload_data = recvall(client_socket, payload_size).decode("utf-8")
-        payload = json.loads(payload_data)
-        log("Received JSON payload")
-
-        selected_option = payload["selected_option"]
-        images_base64 = payload["images"]
-
-        # Process each image
-        processed_images_base64 = []
-        for img_index, img_base64 in enumerate(images_base64):
-            log(f"Processing image {img_index + 1}/{len(images_base64)}")
-
-            # Decode the Base64 image
-            img_data = base64.b64decode(img_base64)
-            nparr = np.frombuffer(img_data, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-            if img is None:
-                log("Failed to decode the received image. Skipping processing.")
-                continue
-
-            log(f"Image decoded. Dimensions: {img.shape}")
-
-            # Process the image across threads
             start_time = time.time()
             divided_image = divide_chunks(img)
             with ThreadPool(processes=THREADS_DIMENSION**2) as pool:
@@ -158,20 +194,12 @@ def handle_client(client_socket):
             processed_img = combine_chunks(processed_chunks)
             processing_time = time.time() - start_time
             log(f"Image completely processed in {processing_time:.4f}s")
-            # Encode the processed image to Base64
-            _, img_encoded = cv2.imencode(".jpg", processed_img)
-            processed_base64 = base64.b64encode(img_encoded).decode("utf-8")
-            processed_images_base64.append(processed_base64)
+            processed_images.append(processed_img)
 
-        # Send the response as JSON
-        response = {"processed_images": processed_images_base64}
-        response_data = json.dumps(response).encode("utf-8")
-
-        # Send the size of the JSON response
-        client_socket.sendall(len(response_data).to_bytes(8, byteorder="big"))
-
-        # Send the JSON response
-        client_socket.sendall(response_data)
+        if PROTOCOL == Protocol.JSON:
+            send_json(client_socket, processed_images)
+        if PROTOCOL == Protocol.BYTES:
+            send_raw_bytes(client_socket, processed_images)
         log("Processed images sent back to client")
 
     except Exception as e:
@@ -182,9 +210,6 @@ def handle_client(client_socket):
 
 
 def main():
-    """
-    Main server loop that accepts connections and handles clients.
-    """
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((SERVER_HOST, SERVER_PORT))
     server_socket.listen(5)
@@ -192,39 +217,28 @@ def main():
 
     try:
         while True:
-            client_socket, client_address = server_socket.accept()
-            log(f"Connection from {client_address}")
-            client_thread = threading.Thread(
-                target=handle_client, args=(client_socket,), daemon=True
-            )
-            client_thread.start()
+            try:
+                server_socket.settimeout(1)
+                client_socket, client_address = server_socket.accept()
+                log(f"Connection from {client_address}")
+                client_thread = threading.Thread(
+                    target=handle_client, args=(client_socket,), daemon=True
+                )
+                client_thread.start()
+            except socket.timeout:
+                pass
 
-    except Exception as e:
-        log(f"Unhandled exception: {e}")
     finally:
         server_socket.close()
         log("Server socket closed.")
 
 
 if __name__ == "__main__":
-    profiler = cProfile.Profile()
     try:
-        profiler.enable()
         main()
+    except KeyboardInterrupt:
+        pass
     except Exception as e:
         log(f"Unhandled exception in main: {e}")
     finally:
-        log("Saving profiling results...")
-        profiler.disable()
-        try:
-            dir = os.path.dirname(__file__)
-            file_path = os.path.join(dir, "profiling_results.txt")
-            with open(file_path, "w") as f:
-                stats = pstats.Stats(profiler, stream=f)
-                stats.strip_dirs()
-                stats.sort_stats("cumtime")
-                stats.print_stats()
-            log(f"Profiling results saved to {file_path}")
-        except Exception as e:
-            log(f"Error saving profiling results: {e}")
         log("Shutting down the server...")
