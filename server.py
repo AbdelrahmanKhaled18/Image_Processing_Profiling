@@ -10,7 +10,7 @@ from multiprocessing.pool import ThreadPool
 from functools import partial
 from communication_helper import *
 
-THREADS_DIMENSION = 3
+THREADS_DIMENSION = 5
 
 # Initialize logging
 initTime = time.time()

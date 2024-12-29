@@ -6,7 +6,7 @@ class Protocol(Enum):
     JSON = 2
 
 
-PROTOCOL = Protocol.BYTES
+PROTOCOL = Protocol.JSON
 SERVER_HOST = "localhost"
 SERVER_PORT = 1420
 
